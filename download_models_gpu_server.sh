@@ -30,27 +30,27 @@ else
     exit 1
 fi
 
-# Llama Guard 3 (8B) 다운로드
+# Llama Guard 3 INT8 (8B) 다운로드 - 메모리 효율적
 echo ""
-echo "📥 Downloading Llama Guard 3 (8B)..."
-echo "This may take 10-20 minutes depending on your internet speed..."
+echo "📥 Downloading Llama Guard 3 INT8 (8B)..."
+echo "This may take 10-15 minutes depending on your internet speed..."
 echo "Models will be cached in: $HF_HOME"
 
-huggingface-cli download meta-llama/Llama-Guard-3-8B \
-    --local-dir $MODELS_DIR/Llama-Guard-3-8B \
+huggingface-cli download meta-llama/Llama-Guard-3-8B-INT8 \
+    --local-dir $MODELS_DIR/Llama-Guard-3-8B-INT8 \
     --local-dir-use-symlinks False
 
-echo "✅ Llama Guard 3 (8B) downloaded to: $MODELS_DIR/Llama-Guard-3-8B"
+echo "✅ Llama Guard 3 INT8 (8B) downloaded to: $MODELS_DIR/Llama-Guard-3-8B-INT8"
 
 # 다운로드 확인
-if [ -d "$MODELS_DIR/Llama-Guard-3-8B" ]; then
+if [ -d "$MODELS_DIR/Llama-Guard-3-8B-INT8" ]; then
     echo "📊 Model files:"
-    ls -lah $MODELS_DIR/Llama-Guard-3-8B/
+    ls -lah $MODELS_DIR/Llama-Guard-3-8B-INT8/
     
     # 모델 크기 확인
     echo ""
     echo "📈 Total size:"
-    du -sh $MODELS_DIR/Llama-Guard-3-8B/
+    du -sh $MODELS_DIR/Llama-Guard-3-8B-INT8/
 else
     echo "❌ Download failed"
     exit 1

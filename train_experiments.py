@@ -35,13 +35,13 @@ class ExperimentRunner:
         
         # 모델 리스트 (로컬 경로 우선, HuggingFace Hub 백업)
         models = [
-            "./models/Llama-Guard-3-8B",  # 로컬 다운로드 모델
+            "./models/Llama-Guard-3-8B-INT8",  # INT8 양자화 모델
             "./models/Llama-Guard-4-12B"  # 로컬 다운로드 모델
         ]
         
         # 로컬 모델이 없으면 HuggingFace Hub에서 직접 로드
         fallback_models = [
-            "meta-llama/Llama-Guard-3-8B",
+            "meta-llama/Llama-Guard-3-8B-INT8",
             "meta-llama/Llama-Guard-4-12B"
         ]
         
@@ -67,7 +67,7 @@ class ExperimentRunner:
                 else:
                     actual_model_name = model_name
                 
-                model_short = actual_model_name.split('/')[-1].replace('Llama-Guard-', 'Guard').replace('-', '')
+                model_short = actual_model_name.split('/')[-1].replace('Llama-Guard-', 'Guard').replace('-', '').replace('INT8', 'I8')
                 
                 experiment = {
                     "id": f"exp_{exp_id:02d}",
@@ -288,7 +288,7 @@ class ExperimentRunner:
                 logging_steps=5 if test_mode else 10,
                 save_steps=50 if test_mode else 100,
                 eval_steps=50 if test_mode else 100,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 save_total_limit=2,
                 load_best_model_at_end=True,
                 report_to=None,
@@ -358,12 +358,22 @@ class ExperimentRunner:
             
             return False
     
-    def run_all_experiments(self, test_mode=True, max_parallel=8):
+    def run_all_experiments(self, test_mode=True, max_parallel=8, excluded_gpus=[1]):
         """모든 실험 순차 실행"""
         
-        print(f"🚀 Running {len(self.experiment_matrix)} experiments")
-        print(f"Test mode: {test_mode}")
-        print(f"Max parallel: {max_parallel}")
+        # GPU 제외 설정
+        if excluded_gpus:
+            available_gpus = [str(i) for i in range(torch.cuda.device_count()) if i not in excluded_gpus]
+            import os
+            os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(available_gpus)
+            print(f"🚀 Running {len(self.experiment_matrix)} experiments")
+            print(f"Test mode: {test_mode}")
+            print(f"Excluded GPUs: {excluded_gpus}")
+            print(f"Available GPUs: {available_gpus}")
+        else:
+            print(f"🚀 Running {len(self.experiment_matrix)} experiments")
+            print(f"Test mode: {test_mode}")
+            print(f"Max parallel: {max_parallel}")
         
         self.print_experiment_matrix()
         
