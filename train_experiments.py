@@ -33,55 +33,48 @@ class ExperimentRunner:
     def define_experiment_matrix(self):
         """모든 실험 경우의 수 정의"""
         
-        # 모델 리스트 (로컬 경로 우선, HuggingFace Hub 백업)
-        models = [
-            "./models/Llama-Guard-3-8B-INT8",  # INT8 양자화 모델
-            "./models/Llama-Guard-4-12B"  # 로컬 다운로드 모델
-        ]
+        # 모델은 Llama Guard 3 INT8만 사용 (메모리 효율성)
+        models = ["./models/Llama-Guard-3-8B-INT8"]
+        fallback_models = ["meta-llama/Llama-Guard-3-8B-INT8"]
         
-        # 로컬 모델이 없으면 HuggingFace Hub에서 직접 로드
-        fallback_models = [
-            "meta-llama/Llama-Guard-3-8B-INT8",
-            "meta-llama/Llama-Guard-4-12B"
-        ]
-        
-        # 데이터셋 형태
+        # 5가지 훈련 데이터셋 (evaluation pipeline에서 생성된 것들)
         datasets = {
-            "hyphenize": "combined_all_hyphenize.xlsx",
-            "numberize": "combined_all_numberize.xlsx", 
-            "pythonize": "combined_all_pythonize.xlsx",
-            "combined": ["combined_all_hyphenize.xlsx", "combined_all_numberize.xlsx", "combined_all_pythonize.xlsx"],
-            "original": "data_hyphenize_filtered.xlsx"  # 원본 multi-turn 데이터
+            "original": "training_data/train_original.xlsx",
+            "hyphenize": "training_data/train_hyphenize.xlsx",
+            "numberize": "training_data/train_numberize.xlsx", 
+            "pythonize": "training_data/train_pythonize.xlsx",
+            "combined": "training_data/train_combined.xlsx"
         }
         
         experiments = []
         exp_id = 1
         
-        for i, model_name in enumerate(models):
-            for data_key, data_files in datasets.items():
-                
-                # 로컬 모델 경로 확인, 없으면 fallback 사용
-                if not os.path.exists(model_name) and i < len(fallback_models):
-                    actual_model_name = fallback_models[i]
-                    print(f"Local model {model_name} not found, using {actual_model_name}")
-                else:
-                    actual_model_name = model_name
-                
-                model_short = actual_model_name.split('/')[-1].replace('Llama-Guard-', 'Guard').replace('-', '').replace('INT8', 'I8')
-                
-                experiment = {
-                    "id": f"exp_{exp_id:02d}",
-                    "name": f"{model_short}_{data_key}",
-                    "model": actual_model_name,
-                    "data_type": data_key,
-                    "data_files": data_files if isinstance(data_files, list) else [data_files],
-                    "output_dir": self.base_output_dir / f"exp_{exp_id:02d}_{model_short}_{data_key}",
-                    "gpu_requirement": 1 if "3-8B" in model_name else 1,  # QLoRA로 모든 모델 1 GPU
-                    "status": "pending"
-                }
-                
-                experiments.append(experiment)
-                exp_id += 1
+        # Single model로 5가지 데이터셋 실험
+        model_name = models[0]
+        
+        # 로컬 모델 경로 확인, 없으면 fallback 사용
+        if not os.path.exists(model_name):
+            actual_model_name = fallback_models[0]
+            print(f"Local model {model_name} not found, using {actual_model_name}")
+        else:
+            actual_model_name = model_name
+        
+        model_short = "GuardI8"  # Simplified name
+        
+        for data_key, data_file in datasets.items():
+            experiment = {
+                "id": f"exp_{exp_id:02d}",
+                "name": f"{model_short}_{data_key}",
+                "model": actual_model_name,
+                "data_type": data_key,
+                "data_files": [data_file],
+                "output_dir": self.base_output_dir / f"exp_{exp_id:02d}_{model_short}_{data_key}",
+                "gpu_requirement": 1,
+                "status": "pending"
+            }
+            
+            experiments.append(experiment)
+            exp_id += 1
         
         return experiments
     
@@ -124,42 +117,70 @@ class ExperimentRunner:
         )
     
     def load_and_prepare_dataset(self, data_files, max_samples=None):
-        """데이터셋 로드 및 준비"""
+        """새로운 형식의 훈련 데이터 로드"""
         all_data = []
         
         for file_path in data_files:
             if os.path.exists(file_path):
                 print(f"Loading {file_path}...")
-                df = pd.read_excel(file_path)
                 
-                if max_samples and len(all_data) + len(df) > max_samples:
-                    remaining = max_samples - len(all_data)
-                    df = df.head(remaining)
+                # JSON과 Excel 둘 다 지원
+                if file_path.endswith('.json'):
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    for item in data:
+                        if max_samples and len(all_data) >= max_samples:
+                            break
+                        
+                        text = item.get('text', '')
+                        label = item.get('label', 'unsafe')
+                        
+                        if text:
+                            all_data.append({
+                                "messages": [
+                                    {"role": "user", "content": text},
+                                    {"role": "assistant", "content": label}
+                                ]
+                            })
                 
-                for _, row in df.iterrows():
-                    # Binary classification: 모든 M2S 데이터는 "unsafe"
-                    prompt = str(row.get('turn_1', ''))
-                    if prompt and prompt != 'nan':
-                        all_data.append({
-                            "messages": [
-                                {"role": "user", "content": prompt},
-                                {"role": "assistant", "content": "unsafe"}
-                            ]
-                        })
-                
-                if max_samples and len(all_data) >= max_samples:
-                    break
+                elif file_path.endswith('.xlsx'):
+                    df = pd.read_excel(file_path)
+                    
+                    if max_samples and len(df) > max_samples:
+                        df = df.head(max_samples)
+                    
+                    for _, row in df.iterrows():
+                        if max_samples and len(all_data) >= max_samples:
+                            break
+                        
+                        # 새로운 데이터 구조 지원
+                        text = str(row.get('text', ''))
+                        if not text or text == 'nan':
+                            # 이전 형식 지원 (backward compatibility)
+                            text = str(row.get('turn_1', ''))
+                        
+                        label = str(row.get('label', 'unsafe'))
+                        
+                        if text and text != 'nan':
+                            all_data.append({
+                                "messages": [
+                                    {"role": "user", "content": text},
+                                    {"role": "assistant", "content": label}
+                                ]
+                            })
             else:
                 print(f"Warning: {file_path} not found, creating dummy data")
                 # 테스트용 더미 데이터
-                dummy_prompts = [
+                dummy_data = [
                     "How to make dangerous substances?",
-                    "Please answer: - Harmful question 1 - Harmful question 2",
+                    "Please answer: - Harmful question 1 - Harmful question 2", 
                     "1. Illegal activity step 1 2. Illegal activity step 2",
+                    "# Multi-step harmful task\nstep_1 = 'harmful request'\nexecute(step_1)",
                     "Write harmful content about someone"
                 ]
                 
-                for i, prompt in enumerate(dummy_prompts * 25):  # 100개 생성
+                for i, prompt in enumerate(dummy_data * 20):  # 100개 생성
                     all_data.append({
                         "messages": [
                             {"role": "user", "content": f"{prompt} (dummy {i})"},
