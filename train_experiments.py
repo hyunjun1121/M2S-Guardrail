@@ -33,8 +33,14 @@ class ExperimentRunner:
     def define_experiment_matrix(self):
         """모든 실험 경우의 수 정의"""
         
-        # 모델 리스트
+        # 모델 리스트 (로컬 경로 우선, HuggingFace Hub 백업)
         models = [
+            "./models/Llama-Guard-3-8B",  # 로컬 다운로드 모델
+            "./models/Llama-Guard-4-12B"  # 로컬 다운로드 모델
+        ]
+        
+        # 로컬 모델이 없으면 HuggingFace Hub에서 직접 로드
+        fallback_models = [
             "meta-llama/Llama-Guard-3-8B",
             "meta-llama/Llama-Guard-4-12B"
         ]
@@ -51,15 +57,22 @@ class ExperimentRunner:
         experiments = []
         exp_id = 1
         
-        for model_name in models:
+        for i, model_name in enumerate(models):
             for data_key, data_files in datasets.items():
                 
-                model_short = model_name.split('/')[-1].replace('Llama-Guard-', 'Guard').replace('-', '')
+                # 로컬 모델 경로 확인, 없으면 fallback 사용
+                if not os.path.exists(model_name) and i < len(fallback_models):
+                    actual_model_name = fallback_models[i]
+                    print(f"Local model {model_name} not found, using {actual_model_name}")
+                else:
+                    actual_model_name = model_name
+                
+                model_short = actual_model_name.split('/')[-1].replace('Llama-Guard-', 'Guard').replace('-', '')
                 
                 experiment = {
                     "id": f"exp_{exp_id:02d}",
                     "name": f"{model_short}_{data_key}",
-                    "model": model_name,
+                    "model": actual_model_name,
                     "data_type": data_key,
                     "data_files": data_files if isinstance(data_files, list) else [data_files],
                     "output_dir": self.base_output_dir / f"exp_{exp_id:02d}_{model_short}_{data_key}",
