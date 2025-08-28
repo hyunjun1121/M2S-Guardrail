@@ -144,12 +144,13 @@ def create_prompt_guard_dataset(training_data, tokenizer, max_length=512):
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
     return tokenized_dataset
 
-def run_guardrail_finetuning(model_name, data_file, experiment_name):
-    """Guardrail 모델 Fine-tuning"""
+def run_guardrail_with_validation(model_name, train_file, val_file, experiment_name):
+    """Train/Validation으로 분할된 데이터로 Guardrail Fine-tuning"""
     
-    print(f"🚀 Guardrail Fine-tuning 시작")
+    print(f"🚀 Guardrail Fine-tuning 시작 (with Validation)")
     print(f"모델: {model_name}")
-    print(f"데이터: {data_file}")
+    print(f"Train 데이터: {train_file}")
+    print(f"Validation 데이터: {val_file}")
     print(f"실험: {experiment_name}")
     
     # 모델 경로 설정
@@ -196,23 +197,38 @@ def run_guardrail_finetuning(model_name, data_file, experiment_name):
     
     print(f"모델 파라미터: {model.num_parameters():,}")
     
-    # 데이터 처리
-    print("Harmful 데이터셋 처리 중...")
-    training_data = process_harmful_dataset(data_file, model_type)
+    # Train 데이터 처리
+    print("Train 데이터셋 처리 중...")
+    train_data = process_harmful_dataset(train_file, model_type)
+    
+    # Validation 데이터 처리
+    val_data = None
+    if val_file and os.path.exists(val_file):
+        print("Validation 데이터셋 처리 중...")
+        val_data = process_harmful_dataset(val_file, model_type)
     
     # 샘플링 (메모리 절약)
-    sample_size = min(5000, len(training_data))  # 최대 5000개 샘플
-    if len(training_data) > sample_size:
+    train_sample_size = min(5000, len(train_data))
+    if len(train_data) > train_sample_size:
         import random
-        training_data = random.sample(training_data, sample_size)
-        print(f"샘플링: {sample_size}개 사용")
+        train_data = random.sample(train_data, train_sample_size)
+        print(f"Train 샘플링: {train_sample_size}개 사용")
+    
+    if val_data:
+        val_sample_size = min(1000, len(val_data))
+        if len(val_data) > val_sample_size:
+            import random
+            val_data = random.sample(val_data, val_sample_size)
+            print(f"Validation 샘플링: {val_sample_size}개 사용")
     
     # 데이터셋 생성
     if model_type == "prompt_guard":
-        dataset = create_prompt_guard_dataset(training_data, tokenizer, max_length)
+        train_dataset = create_prompt_guard_dataset(train_data, tokenizer, max_length)
+        val_dataset = create_prompt_guard_dataset(val_data, tokenizer, max_length) if val_data else None
         data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
     else:
-        dataset = create_llama_guard_dataset(training_data, tokenizer, max_length)
+        train_dataset = create_llama_guard_dataset(train_data, tokenizer, max_length)
+        val_dataset = create_llama_guard_dataset(val_data, tokenizer, max_length) if val_data else None
         data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     
     # 출력 디렉터리
@@ -226,13 +242,17 @@ def run_guardrail_finetuning(model_name, data_file, experiment_name):
             overwrite_output_dir=True,
             num_train_epochs=3,
             per_device_train_batch_size=4,
+            per_device_eval_batch_size=4,
             gradient_accumulation_steps=4,
             learning_rate=2e-5,
             weight_decay=0.01,
             logging_steps=50,
             save_steps=500,
+            eval_steps=500,
             save_strategy="steps",
-            eval_strategy="no",
+            eval_strategy="steps" if val_dataset else "no",
+            load_best_model_at_end=True if val_dataset else False,
+            metric_for_best_model="eval_loss" if val_dataset else None,
             fp16=True,
             gradient_checkpointing=True,
             dataloader_pin_memory=False,
@@ -245,13 +265,17 @@ def run_guardrail_finetuning(model_name, data_file, experiment_name):
             overwrite_output_dir=True,
             num_train_epochs=2,
             per_device_train_batch_size=1,
+            per_device_eval_batch_size=1,
             gradient_accumulation_steps=8,
             learning_rate=1e-5,
             weight_decay=0.01,
             logging_steps=25,
             save_steps=250,
+            eval_steps=250,
             save_strategy="steps",
-            eval_strategy="no",
+            eval_strategy="steps" if val_dataset else "no",
+            load_best_model_at_end=True if val_dataset else False,
+            metric_for_best_model="eval_loss" if val_dataset else None,
             fp16=True,
             gradient_checkpointing=True,
             dataloader_pin_memory=False,
@@ -263,7 +287,8 @@ def run_guardrail_finetuning(model_name, data_file, experiment_name):
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
         data_collator=data_collator,
         tokenizer=tokenizer,
     )
@@ -282,8 +307,10 @@ def run_guardrail_finetuning(model_name, data_file, experiment_name):
         "model_name": model_name,
         "model_type": model_type,
         "experiment_name": experiment_name,
-        "data_file": data_file,
-        "training_samples": len(training_data),
+        "train_file": train_file,
+        "val_file": val_file,
+        "train_samples": len(train_data),
+        "val_samples": len(val_data) if val_data else 0,
         "output_dir": output_dir,
         "max_length": max_length,
         "model_parameters": model.num_parameters()
@@ -294,7 +321,8 @@ def run_guardrail_finetuning(model_name, data_file, experiment_name):
     
     print(f"✅ Fine-tuning 완료!")
     print(f"📁 모델 저장 위치: {output_dir}")
-    print(f"📊 훈련 샘플: {len(training_data)}")
+    print(f"📊 Train 샘플: {len(train_data)}")
+    print(f"📊 Validation 샘플: {len(val_data) if val_data else 0}")
     
     # 메모리 정리
     del trainer, model
@@ -303,19 +331,21 @@ def run_guardrail_finetuning(model_name, data_file, experiment_name):
     return output_dir
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Guardrail Model Fine-tuning for Harmful Content Detection')
+    parser = argparse.ArgumentParser(description='Guardrail Model Fine-tuning with Train/Validation Split')
     parser.add_argument('--model', required=True, 
                        choices=['Llama-Guard-4-12B', 'Llama-Prompt-Guard-2-86M'],
                        help='Guardrail model to fine-tune')
-    parser.add_argument('--data', required=True, 
-                       help='Path to harmful dataset (Excel file)')
+    parser.add_argument('--train', required=True, 
+                       help='Path to training dataset (Excel file)')
+    parser.add_argument('--val', required=False,
+                       help='Path to validation dataset (Excel file)')
     parser.add_argument('--name', required=True,
-                       help='Experiment name (e.g., original, hyphenize, numberize, pythonize, combined)')
+                       help='Experiment name')
     
     args = parser.parse_args()
     
     try:
-        result_dir = run_guardrail_finetuning(args.model, args.data, args.name)
+        result_dir = run_guardrail_with_validation(args.model, args.train, args.val, args.name)
         print(f"\n🎉 실험 성공! 결과: {result_dir}")
     except Exception as e:
         print(f"\n❌ 실험 실패: {e}")
