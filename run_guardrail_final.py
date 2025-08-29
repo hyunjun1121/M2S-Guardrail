@@ -139,19 +139,10 @@ def run_guardrail_final(model_name, train_file, val_file, experiment_name):
         print("Validation 데이터셋 처리 중...")
         val_data = process_harmful_dataset(val_file, model_type)
     
-    # 샘플링 (메모리 절약)
-    train_sample_size = min(2000, len(train_data))  # 더 작게 설정
-    if len(train_data) > train_sample_size:
-        import random
-        train_data = random.sample(train_data, train_sample_size)
-        print(f"Train 샘플링: {train_sample_size}개 사용")
-    
+    # 전체 데이터 사용 (80/20 분할 그대로)
+    print(f"Train 샘플: {len(train_data)}개 (전체 사용)")
     if val_data:
-        val_sample_size = min(500, len(val_data))  # 더 작게 설정
-        if len(val_data) > val_sample_size:
-            import random
-            val_data = random.sample(val_data, val_sample_size)
-            print(f"Validation 샘플링: {val_sample_size}개 사용")
+        print(f"Validation 샘플: {len(val_data)}개 (전체 사용)")
     
     # 데이터셋 생성 (성공한 방식 사용)
     train_dataset = create_prompt_guard_dataset(train_data, tokenizer, max_length)
